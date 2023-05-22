@@ -1,0 +1,7 @@
+/dataset/*
+/original_notebook.ipynb
+/ml_engineer_take_home_assessment.py
+/ml-engineer-assessment-dataset.zip
+/.idea/sonarlint/issuestore/index.pb
+/.idea/sonarlint/securityhotspotstore/index.pb
+/.idea/.gitignore
