@@ -74,7 +74,8 @@ def read_xml_file(path):
         "ymin": int(bs_data.find("ymin").text),
         "xmax": int(bs_data.find("xmax").text),
         "ymax": int(bs_data.find("ymax").text),
-        "specie": "_".join(path.split(os.sep)[-1].split("_")[:-1])
+        "specie": "_".join(path.split(os.sep)[-1].split("_")[:-1]),
+        "has_object": bool(bs_data.find("object").text)
     }
 
 
@@ -150,6 +151,7 @@ def train_model(dataset_path, train_list, val_list, num_species, epochs, model_w
 
         for images, labels in train_loader:
             images = images.to(device)
+            labels = {k: torch.as_tensor(v) for k, v in labels.items()}
             labels = {k: v.to(device) for k, v in labels.items()}
 
             optimizer.zero_grad()
