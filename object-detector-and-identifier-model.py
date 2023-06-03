@@ -7,6 +7,7 @@ import warnings
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.data as data
 import torchmetrics
 import torchvision.transforms as transforms
@@ -28,55 +29,62 @@ class Model(nn.Module):
         self.backbone = nn.Sequential(*list(pretrained_model.children())[:-2])
 
         self.num_species = num_species
-        ### Initialize the required Layers
-        self.have_object = nn.Sequential(
-            nn.Linear(512, 1),
-            nn.Sigmoid()
-        )
-        self.cat_or_dog = nn.Sequential(
-            nn.Linear(512, 1),
-            nn.Sigmoid()
-        )
-        self.specie = nn.Sequential(
-            nn.Linear(512, self.num_species),
-            nn.Softmax(dim=1)
-        )
-        self.bbox = nn.Sequential(
-            nn.Linear(512, 4)
-        )
-        ### Initialize the required Layers
+
+        self.fc = nn.Linear(512 * 7 * 7, 512)
+        self.have_object = nn.Linear(512, 1)
+        self.cat_or_dog = nn.Linear(512, 1)
+        self.specie = nn.Linear(512, num_species)
+        self.bbox = nn.Linear(512, 4)
 
     def forward(self, input):
         out_backbone = self.backbone(input)
-        out_backbone = torch.flatten(out_backbone, start_dim=1)
+        out_backbone = out_backbone.view(out_backbone.size(0), -1)
 
-        ### Forward Calls for the Model
-        object_output = self.have_object(out_backbone)
-        bbox_output = self.bbox(out_backbone)
-        cat_or_dog_output = self.cat_or_dog(out_backbone)
-        specie_output = self.specie(out_backbone)
+        out = F.relu(self.fc(out_backbone))
+
+        have_object = torch.sigmoid(self.have_object(out))
+        cat_or_dog = torch.sigmoid(self.cat_or_dog(out))
+        specie = nn.functional.softmax(self.specie(out), dim=1)
+        bbox = torch.sigmoid(self.bbox(out))
+
+        bbox = bbox.view(-1, 4)
+        bbox[:, 0] *= input.size(3)  # xmin
+        bbox[:, 1] *= input.size(2)  # ymin
+        bbox[:, 2] *= input.size(3)  # xmax
+        bbox[:, 3] *= input.size(2)  # ymax
 
         return {
-            "bbox": bbox_output,
-            "object": object_output,
-            "cat_or_dog": cat_or_dog_output,
-            "specie": specie_output
+            "bbox": bbox,
+            "object": have_object,
+            "cat_or_dog": cat_or_dog,
+            "specie": specie
         }
 
 
 def read_xml_file(path):
-    with open(path, 'r') as f:
-        data = f.read()
-    bs_data = BeautifulSoup(data, 'xml')
-    return {
-        "cat_or_dog": bs_data.find("name").text,
-        "xmin": int(bs_data.find("xmin").text),
-        "ymin": int(bs_data.find("ymin").text),
-        "xmax": int(bs_data.find("xmax").text),
-        "ymax": int(bs_data.find("ymax").text),
-        "specie": "_".join(path.split(os.sep)[-1].split("_")[:-1]),
-        "has_object": bool(bs_data.find("object").text)
-    }
+    try:
+        with open(path, 'r') as f:
+            data = f.read()
+        bs_data = BeautifulSoup(data, 'xml')
+        return {
+            "has_object": True,
+            "cat_or_dog": bs_data.find("name").text,
+            "xmin": int(bs_data.find("xmin").text),
+            "ymin": int(bs_data.find("ymin").text),
+            "xmax": int(bs_data.find("xmax").text),
+            "ymax": int(bs_data.find("ymax").text),
+            "specie": "_".join(path.split(os.sep)[-1].split("_")[:-1])  # split specie name from image xml_path
+        }
+    except FileNotFoundError:
+        return {
+            "has_object": False,
+            "cat_or_dog": "NA",
+            "xmin": 0,
+            "ymin": 0,
+            "xmax": 0,
+            "ymax": 0,
+            "specie": "NA"
+        }
 
 
 class CustomDataset(torch.utils.data.Dataset):
@@ -101,7 +109,6 @@ class CustomDataset(torch.utils.data.Dataset):
                 transforms.RandomHorizontalFlip(p=0.5),  # Randomly flip the image horizontally with probability 0.5
                 transforms.RandomRotation(degrees=15),  # Randomly rotate the image by up to 15 degrees
                 transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
-                # Randomly adjust the brightness, contrast, saturation, and hue of the image
             ])
 
     def __len__(self):
@@ -151,14 +158,14 @@ def train_model(dataset_path, train_list, val_list, num_species, epochs, model_w
 
         for images, labels in train_loader:
             images = images.to(device)
-            labels = {k: torch.as_tensor(v) for k, v in labels.items()}
-            labels = {k: v.to(device) for k, v in labels.items()}
+            # labels = {k: torch.as_tensor(v) for k, v in labels.items()}
+            # labels = {k: v.to(device) for k, v in labels.items()}
 
             optimizer.zero_grad()
 
             outputs = model(images)
 
-            loss = criterion(outputs["object"], labels["object"]) + \
+            loss = criterion(outputs["object"], labels["has_object"]) + \
                    criterion(outputs["cat_or_dog"], labels["cat_or_dog"]) + \
                    criterion(outputs["specie"], labels["specie"]) + \
                    criterion(outputs["bbox"], labels["bbox"])
