@@ -73,7 +73,9 @@ def read_xml_file(path):
             "ymin": int(bs_data.find("ymin").text),
             "xmax": int(bs_data.find("xmax").text),
             "ymax": int(bs_data.find("ymax").text),
-            "specie": "_".join(path.split(os.sep)[-1].split("_")[:-1])  # split specie name from image xml_path
+            "specie": "_".join(path.split(os.sep)[-1].split("_")[:-1]),
+            "bbox": [int(bs_data.find("xmin").text), int(bs_data.find("ymin").text), int(bs_data.find("xmax").text),
+                     int(bs_data.find("ymax").text)]
         }
     except FileNotFoundError:
         return {
@@ -83,7 +85,9 @@ def read_xml_file(path):
             "ymin": 0,
             "xmax": 0,
             "ymax": 0,
-            "specie": "NA"
+            "specie": "NA",
+            "bbox": [0, 0, 0, 0]
+
         }
 
 
@@ -137,7 +141,11 @@ def train_model(dataset_path, train_list, val_list, num_species, epochs, model_w
     model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    criterion = nn.BCEWithLogitsLoss()
+
+    has_object_loss = nn.BCELoss()
+    cat_or_dog_loss = nn.BCELoss()
+    specie_loss = nn.CrossEntropyLoss()
+    bbox_loss = nn.MSELoss()
 
     train_dataset = CustomDataset(dataset_path, train_list, train=True)
     val_dataset = CustomDataset(dataset_path, val_list)
@@ -158,17 +166,20 @@ def train_model(dataset_path, train_list, val_list, num_species, epochs, model_w
 
         for images, labels in train_loader:
             images = images.to(device)
-            # labels = {k: torch.as_tensor(v) for k, v in labels.items()}
-            # labels = {k: v.to(device) for k, v in labels.items()}
+            labels['cat_or_dog'] = torch.tensor([1 if x == 'dog' else 0 for x in labels['cat_or_dog']]).to(device)
+            species = list(set(labels['specie']))
+            labels['specie'] = torch.tensor([species.index(x) for x in labels['specie']]).to(device)
 
             optimizer.zero_grad()
 
             outputs = model(images)
 
-            loss = criterion(outputs["object"], labels["has_object"]) + \
-                   criterion(outputs["cat_or_dog"], labels["cat_or_dog"]) + \
-                   criterion(outputs["specie"], labels["specie"]) + \
-                   criterion(outputs["bbox"], labels["bbox"])
+            loss_have_object = has_object_loss(outputs["has"], labels)
+            loss_specie = specie_loss(outputs["specie"], labels[:, 1])
+            loss_cat_or_dog = cat_or_dog_loss(outputs["cat_or_dog"], labels[:, 2])
+
+            loss_bbox = bbox_loss(outputs["bbox"], labels[:, 3:7])
+            loss = loss_have_object + loss_specie + loss_cat_or_dog + loss_bbox
 
             loss.backward()
             optimizer.step()
@@ -188,14 +199,16 @@ def train_model(dataset_path, train_list, val_list, num_species, epochs, model_w
         with torch.no_grad():
             for images, labels in val_loader:
                 images = images.to(device)
-                labels = {k: v.to(device) for k, v in labels.items()}
-
+                species = list(set(labels['specie']))
+                labels['specie'] = torch.tensor([species.index(x) for x in labels['specie']]).to(device)
+                labels['cat_or_dog'] = torch.tensor([1 if x == 'dog' else 0 for x in labels['cat_or_dog']]).to(device)
                 outputs = model(images)
 
-                val_loss += criterion(outputs["object"], labels["object"]) + \
-                            criterion(outputs["cat_or_dog"], labels["cat_or_dog"]) + \
-                            criterion(outputs["specie"], labels["specie"]) + \
-                            criterion(outputs["bbox"], labels["bbox"])
+                loss = 0.0
+                for i, (key, value) in enumerate(outputs.items()):
+                    loss += loss_functions[i](value, labels[key])
+
+                val_loss += loss
 
                 bbox_metric.update(outputs["bbox"], labels["bbox"])
                 object_metric.update(outputs["object"], labels["object"])
