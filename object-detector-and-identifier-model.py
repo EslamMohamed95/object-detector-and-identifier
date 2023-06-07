@@ -1,6 +1,4 @@
-# %% md
-# MODEL IMPLEMENTATION:
-# %%
+
 import os
 import random
 import warnings
@@ -145,7 +143,11 @@ def train_model(dataset_path, train_list, val_list, num_species, epochs, model_w
     has_object_loss = nn.BCELoss()
     cat_or_dog_loss = nn.BCELoss()
     specie_loss = nn.CrossEntropyLoss()
-    bbox_loss = nn.MSELoss()
+    # bbox_loss = nn.MSELoss()
+    xmin_loss = torch.nn.MSELoss()
+    ymin_loss = torch.nn.MSELoss()
+    xmax_loss = torch.nn.MSELoss()
+    ymax_loss = torch.nn.MSELoss()
 
     train_dataset = CustomDataset(dataset_path, train_list, train=True)
     val_dataset = CustomDataset(dataset_path, val_list)
@@ -174,12 +176,15 @@ def train_model(dataset_path, train_list, val_list, num_species, epochs, model_w
 
             outputs = model(images)
 
-            loss_have_object = has_object_loss(outputs["has"], labels)
-            loss_specie = specie_loss(outputs["specie"], labels[:, 1])
-            loss_cat_or_dog = cat_or_dog_loss(outputs["cat_or_dog"], labels[:, 2])
+            loss_have_object = has_object_loss(outputs['object'], labels['has_object'].float().unsqueeze(1))
+            loss_specie = specie_loss(outputs["specie"], labels['specie'])
+            loss_cat_or_dog = cat_or_dog_loss(outputs["cat_or_dog"], labels['cat_or_dog'].float().unsqueeze(1))
+            loss_xmin = xmin_loss(outputs["bbox"][:, 0], labels['xmin'])
+            loss_ymin = ymin_loss(outputs["bbox"][:, 1], labels['ymin'])
+            loss_xmax = xmax_loss(outputs["bbox"][:, 2], labels['xmax'])
+            loss_ymax = ymax_loss(outputs["bbox"][:,3], labels['ymax'])
 
-            loss_bbox = bbox_loss(outputs["bbox"], labels[:, 3:7])
-            loss = loss_have_object + loss_specie + loss_cat_or_dog + loss_bbox
+            loss = loss_have_object + loss_specie + loss_cat_or_dog + loss_xmin + loss_xmax + loss_ymin + loss_ymax
 
             loss.backward()
             optimizer.step()
